@@ -1,0 +1,396 @@
+"""Product CRUD routes + BoM configuration + procurement strategy setup."""
+
+from flask import Blueprint, flash, redirect, render_template, request, url_for, jsonify
+from flask_login import login_required, current_user
+
+from models import db, Product, Vendor, BillOfMaterials, BomLine, BomOperation
+from models.audit import log_audit
+from routes.utils import role_required, is_json_request
+
+products_bp = Blueprint("products", __name__, url_prefix="/products")
+
+
+# ------------------------------------------------------------------
+# List
+# ------------------------------------------------------------------
+# ------------------------------------------------------------------
+# List & Create REST Endpoint
+# ------------------------------------------------------------------
+@products_bp.route("/", methods=["GET", "POST"])
+@login_required
+def list_products():
+    if request.method == "POST":
+        return create()
+
+    q = request.args.get("q", "").strip()
+    query = Product.query
+    if q:
+        query = query.filter(
+            Product.name.ilike(f"%{q}%") | Product.sku.ilike(f"%{q}%")
+        )
+    products = query.order_by(Product.name).all()
+    return render_template("products/list.html", products=products, q=q)
+
+
+# ------------------------------------------------------------------
+# Create
+# ------------------------------------------------------------------
+@products_bp.route("/create", methods=["GET", "POST"])
+@login_required
+@role_required("admin", "manager", "sales")
+def create():
+    vendors = Vendor.query.order_by(Vendor.name).all()
+    data = request.get_json() if request.is_json else request.form
+
+    if request.method == "POST":
+        name = data.get("name", "").strip()
+        sku = data.get("sku", "").strip()
+        description = data.get("description", "").strip()
+        category = data.get("category", "").strip()
+        sales_price = float(data.get("sales_price", 0.0) or 0.0)
+        cost_price = float(data.get("cost_price", 0.0) or 0.0)
+        on_hand_qty = float(data.get("on_hand_qty", 0.0) or 0.0)
+        
+        procure_on_demand = False
+        if "procure_on_demand" in data:
+            procure_on_demand = bool(data.get("procure_on_demand"))
+        elif "procurement_strategy" in data:
+            procure_on_demand = (data.get("procurement_strategy") == "make_to_order")
+
+        procurement_type = data.get("procurement_type", "purchase")
+        vendor_id = data.get("vendor_id")
+        if vendor_id:
+            vendor_id = int(vendor_id)
+
+        if not name or not sku:
+            if is_json_request():
+                return jsonify({"error": "Product name and SKU are required."}), 400
+            flash("Product name and SKU are required.", "warning")
+            return render_template("products/form.html", product=None, vendors=vendors)
+
+        if Product.query.filter_by(sku=sku).first():
+            if is_json_request():
+                return jsonify({"error": f"SKU '{sku}' already exists."}), 400
+            flash(f"SKU '{sku}' already exists.", "danger")
+            return render_template("products/form.html", product=None, vendors=vendors)
+
+        product = Product(
+            name=name,
+            sku=sku,
+            description=description,
+            category=category,
+            sales_price=sales_price,
+            cost_price=cost_price,
+            on_hand_qty=on_hand_qty,
+            reserved_qty=0,
+            procure_on_demand=procure_on_demand,
+            procurement_type=procurement_type,
+            vendor_id=vendor_id if vendor_id else None,
+        )
+        db.session.add(product)
+        db.session.commit()
+
+        log_audit(
+            current_user.id, "CREATE", "Product", product.id,
+            None,
+            {"name": name, "sku": sku, "procurement_type": procurement_type},
+            f"Created product '{name}' (SKU: {sku})",
+        )
+        if is_json_request():
+            return jsonify({
+                "message": f"Product '{name}' created.",
+                "id": product.id
+            }), 201
+
+        flash(f"Product '{name}' created.", "success")
+        return redirect(url_for("products.view", product_id=product.id))
+
+    return render_template("products/form.html", product=None, vendors=vendors)
+
+
+# ------------------------------------------------------------------
+# View / Edit / Delete REST Endpoint
+# ------------------------------------------------------------------
+@products_bp.route("/<int:product_id>", methods=["GET", "PUT", "DELETE"])
+@login_required
+def view_edit_delete_product(product_id):
+    if request.method == "PUT":
+        return edit(product_id)
+    elif request.method == "DELETE":
+        return delete(product_id)
+    return view(product_id)
+
+
+# ------------------------------------------------------------------
+# View / Detail
+# ------------------------------------------------------------------
+@products_bp.route("/<int:product_id>/view")
+def view(product_id):
+    product = Product.query.get_or_404(product_id)
+    bom = BillOfMaterials.query.filter_by(product_id=product.id).first()
+    return render_template("products/view.html", product=product, bom=bom)
+
+
+# ------------------------------------------------------------------
+# Edit
+# ------------------------------------------------------------------
+@products_bp.route("/<int:product_id>/edit", methods=["GET", "POST"])
+@login_required
+@role_required("admin", "manager", "sales")
+def edit(product_id):
+    product = Product.query.get_or_404(product_id)
+    vendors = Vendor.query.order_by(Vendor.name).all()
+    data = request.get_json() if request.is_json else request.form
+
+    if request.method in ["POST", "PUT"]:
+        old = {
+            "name": product.name, "sku": product.sku,
+            "description": product.description,
+            "category": product.category,
+            "sales_price": float(product.sales_price),
+            "cost_price": float(product.cost_price),
+            "procurement_type": product.procurement_type,
+            "procure_on_demand": product.procure_on_demand,
+            "vendor_id": product.vendor_id,
+        }
+
+        product.name = data.get("name", "").strip() or product.name
+        product.sku = data.get("sku", "").strip() or product.sku
+        if "description" in data:
+            product.description = data.get("description", "").strip()
+        if "category" in data:
+            product.category = data.get("category", "").strip()
+        if "sales_price" in data:
+            product.sales_price = float(data.get("sales_price", 0.0) or 0.0)
+        if "cost_price" in data:
+            product.cost_price = float(data.get("cost_price", 0.0) or 0.0)
+        
+        if "procure_on_demand" in data:
+            product.procure_on_demand = bool(data.get("procure_on_demand"))
+        elif "procurement_strategy" in data:
+            product.procure_on_demand = (data.get("procurement_strategy") == "make_to_order")
+
+        product.procurement_type = data.get("procurement_type", product.procurement_type)
+        vendor_id = data.get("vendor_id")
+        product.vendor_id = int(vendor_id) if vendor_id else None
+        db.session.commit()
+
+        new = {
+            "name": product.name, "sku": product.sku,
+            "description": product.description,
+            "category": product.category,
+            "sales_price": float(product.sales_price),
+            "cost_price": float(product.cost_price),
+            "procurement_type": product.procurement_type,
+            "procure_on_demand": product.procure_on_demand,
+            "vendor_id": product.vendor_id,
+        }
+        log_audit(
+            current_user.id, "UPDATE", "Product", product.id,
+            old, new,
+            f"Updated product '{product.name}'",
+        )
+        if is_json_request():
+            return jsonify({"message": f"Product '{product.name}' updated."}), 200
+
+        flash(f"Product '{product.name}' updated.", "success")
+        return redirect(url_for("products.view", product_id=product.id))
+
+    return render_template("products/form.html", product=product, vendors=vendors)
+
+
+# ------------------------------------------------------------------
+# Delete
+# ------------------------------------------------------------------
+@products_bp.route("/<int:product_id>/delete", methods=["POST", "DELETE"])
+@login_required
+@role_required("admin", "manager", "sales")
+def delete(product_id):
+    product = Product.query.get_or_404(product_id)
+    name = product.name
+    
+    # Check if the product has transaction references or BoM references
+    has_references = (
+        product.sales_order_lines.count() > 0 or
+        product.purchase_order_lines.count() > 0 or
+        product.stock_movements.count() > 0 or
+        product.manufacturing_orders.count() > 0 or
+        product.bom_component_usages.count() > 0 or
+        product.boms.count() > 0 or
+        (hasattr(product, 'procurement_requests') and product.procurement_requests.count() > 0)
+    )
+    
+    if has_references:
+        product.is_active = False
+        db.session.commit()
+        log_audit(
+            current_user.id, "DEACTIVATE", "Product", product.id,
+            {"is_active": True}, {"is_active": False},
+            f"Deactivated product '{name}' (soft-delete due to existing database references)",
+        )
+        db.session.commit()
+        if is_json_request():
+            return jsonify({"message": f"Product '{name}' is in use, so it was deactivated."}), 200
+        flash(f"Product '{name}' is in use, so it was deactivated.", "info")
+        return redirect(url_for("products.list_products"))
+        
+    try:
+        log_audit(
+            current_user.id, "DELETE", "Product", product.id,
+            {"name": name, "sku": product.sku}, None,
+            f"Deleted product '{name}'",
+        )
+        db.session.delete(product)
+        db.session.commit()
+        if is_json_request():
+            return jsonify({"message": f"Product '{name}' deleted."}), 200
+            
+        flash(f"Product '{name}' deleted.", "success")
+        return redirect(url_for("products.list_products"))
+    except Exception as e:
+        db.session.rollback()
+        # Fallback to soft delete
+        try:
+            product.is_active = False
+            db.session.commit()
+            if is_json_request():
+                return jsonify({"message": f"Product '{name}' is in use, so it was deactivated."}), 200
+            flash(f"Product '{name}' is in use, so it was deactivated.", "info")
+            return redirect(url_for("products.list_products"))
+        except Exception:
+            db.session.rollback()
+            if is_json_request():
+                return jsonify({"error": "Failed to delete or deactivate product."}), 500
+            flash("Failed to delete or deactivate product.", "danger")
+            return redirect(url_for("products.list_products"))
+
+
+# ==================================================================
+# BoM Configuration — assign / update a BoM on a product
+# ==================================================================
+
+@products_bp.route("/<int:product_id>/bom", methods=["GET", "POST"])
+@login_required
+@role_required("admin", "manager")
+def configure_bom(product_id):
+    """Create or update the Bill of Materials for a product."""
+    product = Product.query.get_or_404(product_id)
+    bom = BillOfMaterials.query.filter_by(product_id=product.id).first()
+    components = Product.query.filter(Product.id != product.id).order_by(Product.name).all()
+
+    if request.method == "POST":
+        bom_name = request.form.get("bom_name", "").strip() or f"BoM - {product.name}"
+
+        # -- Collect component lines from the form --
+        comp_ids = request.form.getlist("component_id")
+        comp_qtys = request.form.getlist("component_qty")
+
+        # -- Collect operation lines from the form --
+        op_names = request.form.getlist("operation_name")
+        op_durations = request.form.getlist("operation_duration")
+        op_sequences = request.form.getlist("operation_sequence")
+
+        if not comp_ids:
+            flash("At least one component is required for a BoM.", "warning")
+            return render_template(
+                "products/bom_form.html",
+                product=product, bom=bom, components=components,
+            )
+
+        # ── Create or update the BoM header ──────────────────────
+        if bom is None:
+            bom = BillOfMaterials(product_id=product.id, name=bom_name)
+            db.session.add(bom)
+            db.session.flush()  # get bom.id
+        else:
+            bom.name = bom_name
+            # Clear old lines & operations for replacement
+            BomLine.query.filter_by(bom_id=bom.id).delete()
+            BomOperation.query.filter_by(bom_id=bom.id).delete()
+
+        # ── Add component lines ──────────────────────────────────
+        for cid, cqty in zip(comp_ids, comp_qtys):
+            cid = int(cid)
+            cqty = float(cqty) if cqty else 1.0
+            if cqty <= 0:
+                continue
+            line = BomLine(bom_id=bom.id, component_product_id=cid, quantity=cqty)
+            db.session.add(line)
+
+        # ── Add operations ───────────────────────────────────────
+        for idx, (oname, odur, oseq) in enumerate(
+            zip(op_names, op_durations, op_sequences), start=1
+        ):
+            oname = oname.strip()
+            if not oname:
+                continue
+            op = BomOperation(
+                bom_id=bom.id,
+                operation_name=oname,
+                duration_mins=float(odur) if odur else 0,
+                sequence=int(oseq) if oseq else idx,
+            )
+            db.session.add(op)
+
+        # Link product to BoM
+        product.bom_id = bom.id
+        db.session.commit()
+
+        log_audit(
+            current_user.id, "UPDATE", "BillOfMaterials", bom.id,
+            None,
+            {"product_id": product.id, "bom_name": bom_name, "components": len(comp_ids)},
+            f"Configured BoM for product '{product.name}'",
+        )
+        flash(f"BoM for '{product.name}' saved.", "success")
+        return redirect(url_for("products.view", product_id=product.id))
+
+    return render_template(
+        "products/bom_form.html",
+        product=product, bom=bom, components=components,
+    )
+
+
+# ==================================================================
+# Procurement Strategy Setup
+# ==================================================================
+
+@products_bp.route("/<int:product_id>/procurement", methods=["GET", "POST"])
+@login_required
+@role_required("admin", "manager")
+def configure_procurement(product_id):
+    """Configure how a product is procured: buy vs manufacture,
+    on-demand toggle, and default vendor."""
+    product = Product.query.get_or_404(product_id)
+    vendors = Vendor.query.order_by(Vendor.name).all()
+
+    if request.method == "POST":
+        old = {
+            "procurement_type": product.procurement_type,
+            "procure_on_demand": product.procure_on_demand,
+            "vendor_id": product.vendor_id,
+        }
+
+        product.procurement_type = request.form.get("procurement_type", "buy")
+        product.procure_on_demand = bool(request.form.get("procure_on_demand"))
+        vendor_id = request.form.get("vendor_id", type=int)
+        product.vendor_id = vendor_id if vendor_id else None
+        db.session.commit()
+
+        new = {
+            "procurement_type": product.procurement_type,
+            "procure_on_demand": product.procure_on_demand,
+            "vendor_id": product.vendor_id,
+        }
+        log_audit(
+            current_user.id, "UPDATE", "Product", product.id,
+            old, new,
+            f"Updated procurement strategy for '{product.name}'",
+        )
+        flash(f"Procurement strategy for '{product.name}' updated.", "success")
+        return redirect(url_for("products.view", product_id=product.id))
+
+    return render_template(
+        "products/procurement_form.html",
+        product=product, vendors=vendors,
+    )
