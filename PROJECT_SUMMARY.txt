@@ -1,0 +1,119 @@
+================================================================================
+                           MINI ERP - PROJECT SUMMARY
+================================================================================
+
+1. OVERVIEW
+-----------
+Mini ERP is a modern, lightweight Enterprise Resource Planning (ERP) platform
+built with a Flask (Python) backend API and a React + Vite + Tailwind CSS frontend.
+It provides comprehensive tracking and management across sales, procurement,
+inventory warehouse stock, manufacturing operations, auditing, and business reports.
+
+2. ARCHITECTURE & DEPLOYMENT
+----------------------------
+* Frontend:
+  - Framework: React (v19) + Vite (v8) + Tailwind CSS (v4)
+  - Hosted on: Vercel (Auto-deploy on git push)
+  - Repo URL: https://github.com/Adarsh-Krishna2006/erc-frontend.git
+* Backend:
+  - Framework: Flask (Python 3.10) + Flask-SQLAlchemy (ORM) + Flask-Login
+  - Hosted on: Render (Auto-deploy on git push)
+  - Repo URL: https://github.com/Arulselvan715/erp_backend.git
+* Database:
+  - Local Dev: PostgreSQL (localhost:5432/mini_erp) & SQLite (mini_erp.db)
+  - Production: Neon Serverless PostgreSQL (AWS cloud database)
+  - Migration Repo: https://github.com/Ashoksundar18/database.git
+
+3. CORE MODULES & FEATURES
+--------------------------
+* Dashboard: High-level overview displaying cards with quick stats (Active Sales,
+  Open POs, Manufacturing Orders in progress, low stock alerts) and a recent audit log.
+* Product Catalog: Management of SKUs, categories, sales/cost pricing, and
+  procurement settings (buy/manufacture, make-to-stock/make-to-order).
+* Sales Module: Customer database management and Sales Order processing (draft,
+  confirmation, shipping, and delivery).
+* Purchase Module: Vendor directories, Purchase Orders (draft, confirmation, and
+  receipt), and Procurement Requests that auto-generate draft POs.
+* Manufacturing Module: Bill of Materials (BOM) recipes, Work Center routing steps,
+  Manufacturing Orders (MO), and a shop floor Work Orders operations queue.
+* Warehouse Inventory: Real-time stock levels (on-hand, reserved, free-to-use),
+  manual stock adjustments, and a chronological Stock Ledger movement log.
+* Compliance & Settings: Detailed database latency diagnostics, password updating,
+  and an immutable audit log tracking every insert, update, or delete.
+* Business Reports: Multi-tab overviews (Financial summary, Sales activity,
+  Procurement logs, Inventory valuation, Production activity, and low-stock deficits).
+
+4. USER ROLE PERMISSIONS MATRIX
+-------------------------------
+* Admin (Full Access):
+  - Read/write access to all pages, settings, and audit logs.
+  - Can create and modify users.
+* Inventory Manager (Warehouse Operations):
+  - Products catalog management.
+  - Sales Orders, Purchase Orders, and Manufacturing Orders read/write.
+  - Full access to Stock Ledger, Stock Adjustments, and Inventory.
+* Business Owner (Executive Dashboard):
+  - Access to Reports, Sales Overview, Purchase Overview, and Manufacturing Overview.
+  - Read-only access to customer, vendor, and transactional order histories.
+* Sales User (Commercial Frontdesk):
+  - Customer directory management.
+  - Sales Order creation and fulfillment.
+  - Product catalog management (create/edit/delete).
+* Purchase User (Procurement Frontdesk):
+  - Vendor directory management.
+  - Purchase Order creation, confirmation, and receipt.
+  - Procurement Requests management.
+  - Bill of Materials approval workflow (Approve / Reject pending requests).
+* Manufacturing User (Shop Floor Operations):
+  - Work Orders queue (actions: Start / Complete operations).
+  - Manufacturing Order creation and execution.
+  - Bill of Materials creation (saves as a "pending request" for Purchaser review).
+
+5. DATABASE SCHEMA SUMMARY
+--------------------------
+* users: id, username, email, password_hash, role, is_active, created_at
+* customers/vendors: id, name, email, phone, city, state, country, created_at
+* products: id, sku, name, description, category, unit_of_measure, sales_price,
+  cost_price, on_hand_qty, reserved_qty, reorder_level, procure_on_demand,
+  procurement_type, vendor_id, is_active
+* bill_of_materials: id, product_id, name, version, status (pending/approved/rejected),
+  is_active
+* bom_lines: id, bom_id, component_id (Product FK), quantity, unit_of_measure
+* bom_operations: id, bom_id, sequence, name, work_center, duration_minutes
+* sales_orders/purchase_orders: id, order_number, customer_id/vendor_id, user_id,
+  status, order_date, expected_date, subtotal, tax_amount, total_amount, notes
+* sales_order_lines/purchase_order_lines: id, order_id, product_id, quantity,
+  unit_price, line_total, delivered_qty/received_qty
+* procurement_requests: id, product_id, quantity, status (pending/approved/rejected/po_created),
+  user_id, notes
+* manufacturing_orders: id, order_number, product_id, bom_id, user_id, quantity,
+  status, planned_start, planned_end, actual_start, actual_end
+* work_orders: id, manufacturing_order_id, bom_operation_id, sequence, status,
+  planned_duration_min, actual_duration_min, started_at, finished_at
+* stock_ledger: id, product_id, movement_type, quantity, reference_type,
+  reference_id, description, user_id, created_at
+* audit_logs: id, table_name, record_id, action, old_values (JSON),
+  new_values (JSON), user_id, ip_address (VARCHAR(500)), user_agent
+
+6. CRITICAL BUG FIXES & ENHANCEMENTS
+------------------------------------
+* Session Stickiness: Solved session overlaps where logging out of one user and
+  logging in as another loaded the previous user. Added Flask-Login session invalidation
+  on POST requests and immediate frontend local storage clearing.
+* Product Deletion: Solved CORS network failures on deletion requests. Replaced body-based
+  is_json checks with is_json_request() helper to handle header checks for DELETE requests.
+  Standardized soft-deletion deactivation on products in use.
+* Stock Adjustment: Fixed Python type errors when adding float counts to database Decimals by
+  casting input counts to Decimal(str(qty)). Expanded audit_logs.ip_address to 500 characters
+  to handle descriptive audit strings.
+* Purchase Order Saving: Fixed a 500 error on line item creation by changing the keyword argument
+  from purchase_order_id to order_id in lines instantiation.
+* BOM Request/Approval: Implemented a strict request-approval flow. Manufacturing users create
+  BOMs which save as "pending". Purchasers review, approve, or reject these requests. Enabled
+  BOM tab for Purchasers and hid BOM edit options from the Business Owner.
+* Sales User Product Management: Added "sales" to products routing permission decorators and
+  conditionally enabled edit/create actions for Sales Users on the frontend Products page.
+* Mock Seeding: Written a transaction-compliant seed script that populates the DB with clean
+  mock tables of products, BOMs, routing steps, active/delivered orders, and work orders
+  to instantly populate stats cards, reports, and operations queues.
+================================================================================
