@@ -2,6 +2,7 @@
 __pycache__/
 *.py[cod]
 *$py.class
+*.pytest_cache/
 
 # Environments
 .venv/
@@ -11,11 +12,45 @@ ENV/
 # Database files
 database/*.db
 database/mini_erp.db
+*.db
+*.db-journal
 
 # Local environment variables (secrets)
 .env
 .env.local
+*.local
 
-# IDE configurations
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# OS Files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE and Editors configurations
 .vscode/
 .idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Version control ignore rules for Shiv ERP Monorepo (Legacy folder structure)
+backend/.venv/
+backend/venv/
+backend/ENV/
+backend/__pycache__/
+backend/**/*.py[cod]
+backend/*$py.class
+backend/.pytest_cache/
+backend/*.db
+backend/*.db-journal
+frontend/node_modules/
+frontend/dist/
+frontend/dist-ssr/
+frontend/.eslintcache
