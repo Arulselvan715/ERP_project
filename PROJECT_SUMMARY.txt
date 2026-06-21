@@ -117,3 +117,9 @@ inventory warehouse stock, manufacturing operations, auditing, and business repo
   mock tables of products, BOMs, routing steps, active/delivered orders, and work orders
   to instantly populate stats cards, reports, and operations queues.
 ================================================================================
+
+
+
+App Link -https://erc-frontend-red.vercel.app/login
+user:msdevanathan992006@gmail.com
+password:9906
